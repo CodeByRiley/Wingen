@@ -1,0 +1,25 @@
+{
+  "verbose": true,
+  "enable_semantic_tokens": false,
+  "enable_document_symbols": true,
+  "enable_hover": true,
+  "enable_snippets": true,
+  "enable_inlay_hints": true,
+  "enable_procedure_context": true,
+  "checker_args": "-vet",
+  "profile": "windows_profile",
+  "profiles": [
+    { "name": "default", "checker_path": ["src"] },
+
+    {
+      "name": "linux_profile",
+      "os": "linux",
+      "checker_path": ["src"]
+    },
+    {
+      "name": "windows_profile",
+      "os": "windows",
+      "checker_path": ["src"]
+    }
+  ]
+}

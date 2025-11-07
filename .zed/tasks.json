@@ -1,0 +1,48 @@
+[
+  {
+    "label": "Run (Odin)",
+    "cwd": "F:\\develop\\Odin\\Wingen\\src",
+    "command": "odin run .",
+
+    // Display options
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "dock",
+    "hide": "never",
+    "show_summary": true,
+    "show_command": true
+  },
+  {
+    "label": "Build (Odin)",
+    "cwd": "F:\\develop\\Odin\\Wingen\\build",
+    "command": "odin build \"..\\src\" -build-mode:exe -subsystem:windows -target-features:\"sse2\" -target:windows_amd64 -thread-count:12 -o:speed -out:\"wingen.exe\"",
+    "shell": "system",
+
+    // Display options
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "dock",
+    "hide": "never",
+    "show_summary": true,
+    "show_command": true
+  },
+  {
+    "label": "Build and Run",
+    // Set CWD to the project root, where your script and 'build' directory are located.
+    "cwd": "F:\\develop\\Odin\\Wingen\\build",
+
+    // Command now executes the script
+    "command": "./build_run.bat",
+
+    // Display options
+    "use_new_terminal": false,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "dock",
+    "hide": "never",
+    "show_summary": true,
+    "show_command": true
+  }
+]
