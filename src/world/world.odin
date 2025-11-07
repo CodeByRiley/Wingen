@@ -1,6 +1,5 @@
 package world
 
-import "core:math"
 import "core:strings"
 import rl "vendor:raylib"
 import rlgl "vendor:raylib/rlgl"
@@ -13,6 +12,7 @@ ModelPart :: struct {
 }
 
 EntityParts :: struct {
+    id        : i32,
     name      : string,
     owner     : rl.Model,          // GPU owner (UnloadModel when removing)
     parts     : [dynamic]ModelPart,
@@ -28,8 +28,9 @@ World :: struct {
     entities : [dynamic]EntityParts,
 }
 
-// ---------- Lifecycle ----------
 
+
+// ---------- Lifecycle ----------
 make_world :: proc() -> World {
     return World{}
 }
@@ -45,7 +46,6 @@ clear_world :: proc(w: ^World) {
 }
 
 // ---------- Bounds / focus helpers ----------
-
 get_entity_bounds :: proc(e: ^EntityParts) -> (bmin, bmax: rl.Vector3, ok: bool) {
     if !e^.has_model || e^.owner.meshCount == 0 do return {}, {}, false
 
@@ -70,13 +70,14 @@ get_entity_bounds :: proc(e: ^EntityParts) -> (bmin, bmax: rl.Vector3, ok: bool)
 }
 
 // ---------- Loading / removal ----------
-
 add_parts_from_file :: proc(w: ^World, path: string, name := "Model") -> int {
     cpath := strings.clone_to_cstring(path)
     mdl   := rl.LoadModel(cpath)
     if mdl.meshCount <= 0 do return -1
 
+    // ---- create the entity -------------------------------------------------
     e := EntityParts{
+        id        = cast(i32)len(w^.entities),
         name      = strings.clone(name),
         owner     = mdl,
         has_model = true,
@@ -85,6 +86,7 @@ add_parts_from_file :: proc(w: ^World, path: string, name := "Model") -> int {
         scale     = 1,
     }
 
+    // ---- fill parts --------------------------------------------------------
     e.parts = make([dynamic]ModelPart, 0, mdl.meshCount)
     for i in 0..<mdl.meshCount {
         append(&e.parts, ModelPart{
@@ -93,6 +95,12 @@ add_parts_from_file :: proc(w: ^World, path: string, name := "Model") -> int {
         })
     }
 
+    for i in 0..<mdl.meshCount {
+        rl.GenMeshTangents(&e.owner.meshes[i])
+        rl.UploadMesh(&e.owner.meshes[i], false)
+    }
+
+    // ---- store entity -------------------------------------------------------
     append(&w^.entities, e)
     return len(w^.entities) - 1
 }
@@ -120,11 +128,10 @@ remove_entity :: proc(w: ^World, id: int) {
 
 
 // ---------- Drawing ----------
-
-// Option 1 (no matrix math calls needed): use rlgl stack
 draw_entity_parts :: proc(e: ^EntityParts) {
     if !e^.has_model do return
 
+    rlgl.DisableBackfaceCulling()
     rlgl.PushMatrix()
     rlgl.Translatef(e^.offset.x, e^.offset.y, e^.offset.z)
     rlgl.Rotatef(e^.yaw_deg, 0, 1, 0)
@@ -136,24 +143,27 @@ draw_entity_parts :: proc(e: ^EntityParts) {
         rl.DrawMesh(m, mt, rl.Matrix(1))
     }
     rlgl.PopMatrix()
+    rlgl.EnableBackfaceCulling()
 }
-
-// draw_entity_parts :: proc(e: ^EntityParts) {
-//     if !e^.has_model do return
-//     ang := math.to_radians_f32(e^.yaw_deg)
-//     rot := rl.MatrixRotate(rl.Vector3{0,1,0}, ang) // or rl.MatrixRotateY(ang) if available
-//     scl := rl.MatrixScale(e^.scale, e^.scale, e^.scale)
-//     trs := rl.MatrixTranslate(e^.offset.x, e^.offset.y, e^.offset.z)
-//     // S * R * T (choose order you want; this is common for model space)
-//     tmp := rl.MatrixMultiply(scl, rot)
-//     xf  := rl.MatrixMultiply(tmp, trs)
-//     for p in e^.parts {
-//         rl.DrawMesh(e^.owner.meshes[p.mesh_index], e^.owner.materials[p.material_index], xf)
-//     }
-// }
 
 draw :: proc(w: ^World) {
     for i in 0..<len(w^.entities) {
         draw_entity_parts(&w^.entities[i])
+    }
+}
+
+fix_winding :: proc(m: ^rl.Model) {
+    for i in 0..<m.meshCount {
+        mesh := &m.meshes[i]
+        // assume triangles
+        for t in 0..<int(mesh.triangleCount) {
+            i0 := mesh.indices[3*t+0]
+            i1 := mesh.indices[3*t+1]
+            i2 := mesh.indices[3*t+2]
+            // swap i1/i2 to invert winding
+            mesh.indices[3*t+1] = i2
+            mesh.indices[3*t+2] = i1
+        }
+        rl.UploadMesh(mesh, false) // re-upload to GPU
     }
 }

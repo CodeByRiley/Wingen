@@ -16,3 +16,8 @@ v3_norm   :: proc(a: rl.Vector3) -> rl.Vector3 {
     l := v3_len(a); if l <= 0.000001 { return rl.Vector3{0,0,0} }
     return v3_scale(a, 1.0/l)
 }
+
+f2u8_unorm :: proc(v: f32) -> u8 {
+    vv := math.clamp(v, 0.0, 1.0)
+    return cast(u8)(vv*255.0 + 0.5) // round-to-nearest
+}

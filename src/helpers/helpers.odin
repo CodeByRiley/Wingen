@@ -12,25 +12,33 @@ import "core:os"
 import "core:strings"
 import rl "vendor:raylib"
 
-MOUSE_TABLE: map[string]rl.MouseButton
-KEY_TABLE: map[string]rl.KeyboardKey
+// ---------- lookup tables (built on first use) ----------
+MOUSE_TABLE: map[string]rl.MouseButton   // string -> mouse button
+KEY_TABLE:   map[string]rl.KeyboardKey   // string -> key code
+
+// ---------- input binding data ----------
 
 Key_Bind :: struct {
-    key: rl.KeyboardKey,
-    action: string,
+    key: rl.KeyboardKey, // the raylib key code
+    action: string,      // sanitized action id (e.g. "cam_move_forward")
 }
 
 Mouse_Bind :: struct {
-    button: rl.MouseButton,
-    action: string,
+    button: rl.MouseButton, // the raylib mouse button
+    action: string,         // sanitized action id
 }
 
+// quick reverse lookups for building UI, not strictly required here
 Input_Bindings :: struct {
     by_action : map[string]rl.KeyboardKey,
     by_key    : map[rl.KeyboardKey]string,
 }
 
+// ---------- app config ----------
+
 Fullscreen_Type :: enum { EXCLUSIVE, WINDOWED, BORDERLESS}
+
+// all user-facing settings loaded/saved to INI
 App :: struct {
     title: string,
     width: i32,
@@ -42,9 +50,9 @@ App :: struct {
     keybinds: [dynamic]Key_Bind,
     mousebinds: [dynamic]Mouse_Bind,
     mouse_sensitivity: f32,
-
 }
 
+// default values used on first launch or as merge base for INI
 default_app :: proc() -> App {
     kb := make([dynamic]Key_Bind, 0, 12)
     mb := make([dynamic]Mouse_Bind, 0, 4)
@@ -57,9 +65,10 @@ default_app :: proc() -> App {
     append(&kb, Key_Bind{.E, "cam_move_up"})
     append(&kb, Key_Bind{.LEFT_SHIFT,   "cam_speed"})
     append(&kb, Key_Bind{.LEFT_CONTROL, "cam_move_enable"})
+    append(&kb, Key_Bind{.G, "render_wireframe"})
     append(&kb, Key_Bind{.F, "cam_focus"})
 
-    append(&mb, Mouse_Bind{.RIGHT, "cam_look"})             // orbit/pan/dolly mode
+    append(&mb, Mouse_Bind{.RIGHT, "cam_look"}) // orbit/pan/dolly
 
     return App{
         title = "Wingen",
@@ -73,27 +82,25 @@ default_app :: proc() -> App {
     }
 }
 
-LogLevel :: enum {
-    INFO, WARN, ERROR, FATAL, PANIC,
-}
+// ---------- logging ----------
 
+LogLevel :: enum { INFO, WARN, ERROR, FATAL, PANIC }
+
+// minimal console logger; keep zero-alloc friendly
 Log :: proc(message: string, level: LogLevel = .INFO){
     switch level {
-        case .INFO:
-            fmt.printf("INFO: %s\n", message)
-        case .WARN:
-            fmt.printf("WARN: %s\n", message)
-        case .ERROR:
-            fmt.printf("ERROR: %s\n", message)
-        case .FATAL:
-            fmt.printf("FATAL: %s\n", message)
-        case .PANIC:
-            fmt.printf("PANIC: %s\n", message)
+        case .INFO:  fmt.printf("INFO: %s\n", message)
+        case .WARN:  fmt.printf("WARN: %s\n", message)
+        case .ERROR: fmt.printf("ERROR: %s\n", message)
+        case .FATAL: fmt.printf("FATAL: %s\n", message)
+        case .PANIC: fmt.printf("PANIC: %s\n", message)
     }
 }
 
+// ---------- config file paths ----------
+
 config_paths :: proc() -> (dir: string, file: string) {
-    // Prefer LOCALAPPDATA on Windows; fallback to working dir.
+    // compute "%LOCALAPPDATA%/Wingen/settings.ini" (or ./Wingen/settings.ini)
     lad := os.get_env("LOCALAPPDATA")
     if lad != "" {
         dir = filepath.join({lad, "Wingen"}, context.allocator)
@@ -105,6 +112,7 @@ config_paths :: proc() -> (dir: string, file: string) {
 }
 
 ensure_dir_exists :: proc(dir: string) {
+    // create directory if missing (no-op if present)
     if !os.exists(dir) {
         Log("Creating Config Directory", .WARN)
         os.make_directory(dir)
@@ -112,6 +120,7 @@ ensure_dir_exists :: proc(dir: string) {
 }
 
 file_exists :: proc(path: string) -> bool {
+    // thin wrapper with trace; returns true if path exists
     if (os.exists(path)) {
         Log("File Exists", .INFO)
         return true
@@ -119,10 +128,12 @@ file_exists :: proc(path: string) -> bool {
         Log("File does not exist", .ERROR)
         return false
     }
-    //return os.exists(path)
 }
 
+// ---------- tiny file I/O helpers ----------
+
 load_text_file :: proc(path: string) -> string {
+    // read whole file into a freshly allocated string
     Log(fmt.tprintf("Loading file %s", path), .INFO)
     bytes, ok := os.read_entire_file(path)
     if !ok { return "" }
@@ -131,12 +142,16 @@ load_text_file :: proc(path: string) -> string {
 }
 
 save_text_file :: proc(path: string, text: string) -> bool {
+    // write whole string to disk
     Log(fmt.tprintf("Saving file %s", path), .INFO)
     bytes := transmute([]u8) text
     return os.write_entire_file(path, bytes)
 }
 
+// ---------- INI parsing / merge ----------
+
 parse_ini_into_app :: proc(app: ^App, src: string) {
+    // merges INI contents into pre-seeded defaults
     section := "window"
     Log("Parsing INI file", .INFO)
 
@@ -144,12 +159,14 @@ parse_ini_into_app :: proc(app: ^App, src: string) {
         l := strip_comments(strings.trim_space(line))
         if l == "" { continue }
 
+        // section header: [Section]
         if l[0] == '[' && l[len(l)-1] == ']' {
             Log(fmt.tprintf("Section: %s", strings.to_lower(strings.trim_space(l[1:len(l)-1]))), .INFO)
             section = strings.to_lower(strings.trim_space(l[1:len(l)-1]))
             continue
         }
 
+        // key=value
         key, val := kv(l)
         key_l := strings.to_lower(key)
 
@@ -185,21 +202,18 @@ parse_ini_into_app :: proc(app: ^App, src: string) {
                         if v, ok := parse_f32(val); ok { app.mouse_sensitivity = max(0.01, v) }
                     }
                 case "keybinds":
-
+                    // keybinds: action = KEY_NAME / numeric code
                     code, ok := key_from_string(val)
                     if ok {
                         action := app_action_sanitize(key)
-                        if action != "" { // Ignore empty
-                            upsert_key_binding(&app.keybinds, action, code)
-                        }
+                        if action != "" { upsert_key_binding(&app.keybinds, action, code) }
                     }
                 case "mousebinds":
+                    // mousebinds: action = LEFT/RIGHT/MIDDLE/SIDE/EXTRA...
                     code, ok := mouse_from_string(val)
                     if ok {
                         action := app_action_sanitize(key)
-                        if action != "" { // Ignore empty
-                            upsert_mouse_binding(&app.mousebinds, action, code)
-                        }
+                        if action != "" { upsert_mouse_binding(&app.mousebinds, action, code) }
                     }
                 }
         }
@@ -207,24 +221,23 @@ parse_ini_into_app :: proc(app: ^App, src: string) {
 }
 
 load_settings :: proc(app: ^App) {
+    // seed defaults, then overlay INI if present (creates file if missing)
     Log("Loading Settings")
     dir, file := config_paths()
     ensure_dir_exists(dir)
 
-    // Seed defaults first
-    app^ = default_app()
+    app^ = default_app() // start from defaults
 
-    // Merge INI if present, otherwise write defaults
     if file_exists(file) {
         text := load_text_file(file)
-        parse_ini_into_app(app, text) // merges into defaults
+        parse_ini_into_app(app, text)
     } else {
-        _ = save_settings(app) // create file with defaults
+        _ = save_settings(app)
     }
 }
 
-
 save_settings :: proc(app: ^App) -> bool {
+    // write current settings to INI (stable, human-editable)
     Log("Saving Settings")
     dir, file := config_paths()
     ensure_dir_exists(dir)
@@ -262,8 +275,10 @@ save_settings :: proc(app: ^App) -> bool {
     return save_text_file(file, out)
 }
 
+// ---------- tiny INI helpers ----------
+
 strip_comments :: proc(s: string) -> string {
-    // Remove ';' or '#' comments (first occurrence)
+    // strip ';' or '#' and trim trailing space
     semi := strings.index_byte(s, ';')
     hash := strings.index_byte(s, '#')
     cut := -1
@@ -274,6 +289,7 @@ strip_comments :: proc(s: string) -> string {
 }
 
 kv :: proc(s: string) -> (key: string, val: string) {
+    // split once on '=' and trim both sides
     i := strings.index_byte(s, '=')
     if i < 0 {
         return strings.trim_space(s), ""
@@ -283,9 +299,10 @@ kv :: proc(s: string) -> (key: string, val: string) {
     return
 }
 
-// ---------- Parsing helpers ----------
+// ---------- parsing primitives ----------
 
 fullscreen_from_string :: proc(s: string) -> (Fullscreen_Type, bool) {
+    // tolerant accepts: "exclusive", "fullscreen", "borderless", etc.
     t := strings.to_lower(strings.trim_space(s))
     switch t {
     case "exclusive", "true", "fullscreen": return .EXCLUSIVE, true
@@ -304,6 +321,7 @@ fullscreen_to_string :: proc(f: Fullscreen_Type) -> string {
 }
 
 parse_bool :: proc(s: string) -> (bool, bool) {
+    // returns (value, ok)
     t := strings.to_lower(s)
     if t == "true" || t == "1" || t == "yes" || t == "on"  { return true,  true }
     if t == "false"|| t == "0" || t == "no"  || t == "off" { return false, true }
@@ -325,14 +343,16 @@ parse_f32 :: proc(s: string) -> (f32, bool) {
 }
 
 clamp_f32 :: proc(x, lo, hi: f32) -> f32 {
+    // saturate x to [lo, hi]
     if x < lo { return lo }
     if x > hi { return hi }
     return x
 }
 
-// ---------- string to/from enum ----------
+// ---------- string <-> enum for keys/buttons ----------
 
 key_from_string :: proc(s: string) -> (rl.KeyboardKey, bool) {
+    // accepts symbolic names ("A", "LEFT_SHIFT", "F5") or numeric codes
     ensure_key_table()
 
     u := strings.to_upper(strings.trim_space(s))
@@ -344,6 +364,7 @@ key_from_string :: proc(s: string) -> (rl.KeyboardKey, bool) {
         u = u[4:]
     }
 
+    // single letter/digit shorthands
     if len(u) == 1 {
         c := u[0]
         if c >= 'A' && c <= 'Z' {
@@ -360,6 +381,7 @@ key_from_string :: proc(s: string) -> (rl.KeyboardKey, bool) {
         return k, true
     }
 
+    // F1..F12
     if strings.has_prefix(u, "F") && len(u) <= 3 {
         if n_i64, ok := strconv.parse_i64(u[1:]); ok {
             n := i32(n_i64)
@@ -373,20 +395,18 @@ key_from_string :: proc(s: string) -> (rl.KeyboardKey, bool) {
 }
 
 key_to_string :: proc(k: rl.KeyboardKey) -> string {
+    // produce stable, human-readable names for INI writes
     ensure_key_table()
 
     for name, code in KEY_TABLE {
         if code == k { return name }
     }
-    // Letters
     if k >= rl.KeyboardKey.A && k <= rl.KeyboardKey.Z {
         return fmt.tprintf("%c", u8(i32('A') + (i32(k) - i32(rl.KeyboardKey.A))))
     }
-    // Digits
     if k >= rl.KeyboardKey.ZERO && k <= rl.KeyboardKey.NINE {
         return fmt.tprintf("%v", i32(k) - i32(rl.KeyboardKey.ZERO))
     }
-    // Function keys
     if k >= rl.KeyboardKey.F1 && k <= rl.KeyboardKey.F12 {
         return fmt.tprintf("F%v", 1 + (i32(k) - i32(rl.KeyboardKey.F1)))
     }
@@ -394,22 +414,20 @@ key_to_string :: proc(k: rl.KeyboardKey) -> string {
 }
 
 mouse_from_string :: proc(s: string) -> (rl.MouseButton, bool) {
+    // accepts LEFT/RIGHT/MIDDLE/SIDE/EXTRA/..., aliases (MB1/BUTTON1), or numbers
     ensure_mouse_table()
 
     u := strings.to_upper(strings.trim_space(s))
     if u == "" { return rl.MouseButton(0), false }
 
-    // Strip optional prefix
     if strings.has_prefix(u, "MOUSE_") {
         u = u[6:]
     }
 
-    // Numeric code support (optional)
     if code_i64, ok := strconv.parse_i64(u); ok {
         return rl.MouseButton(i32(code_i64)), true
     }
 
-    // Shorthand: "M1".."M5"
     if len(u) == 2 && u[0] == 'M' && (u[1] >= '1' && u[1] <= '5') {
         switch u[1] {
         case '1': return .LEFT,   true
@@ -420,7 +438,6 @@ mouse_from_string :: proc(s: string) -> (rl.MouseButton, bool) {
         }
     }
 
-    // Table lookup (covers LEFT/RIGHT/... and aliases like BUTTON1/MB1)
     if b, ok := MOUSE_TABLE[u]; ok {
         return b, true
     }
@@ -429,8 +446,8 @@ mouse_from_string :: proc(s: string) -> (rl.MouseButton, bool) {
 }
 
 mouse_to_string :: proc(m: rl.MouseButton) -> string {
+    // stable names for writing; fallback to numeric
     ensure_mouse_table()
-    // Prefer canonical names we defined (stable writes)
     switch m {
     case .LEFT:    return "LEFT"
     case .RIGHT:   return "RIGHT"
@@ -440,9 +457,10 @@ mouse_to_string :: proc(m: rl.MouseButton) -> string {
     case .FORWARD: return "FORWARD"
     case .BACK:    return "BACK"
     }
-    // Fallback: numeric
     return fmt.tprintf("%v", i32(m))
 }
+
+// ---------- action lookups and polling ----------
 
 find_key_for_action :: proc(binds: [dynamic]Key_Bind, action: string) -> (rl.KeyboardKey, bool) {
     for b in binds {
@@ -488,21 +506,23 @@ key_action_released :: proc(binds: [dynamic]Key_Bind, action: string) -> bool {
     return false
 }
 
+// ---------- table builders (idempotent) ----------
+
 ensure_mouse_table :: proc() {
     if MOUSE_TABLE != nil do return
     Log("Creating mouse table")
     MOUSE_TABLE = make(map[string]rl.MouseButton, context.allocator)
 
-    // Canonical names we will WRITE in the INI
+    // canonical names we WRITE
     MOUSE_TABLE["LEFT"]    = .LEFT
     MOUSE_TABLE["RIGHT"]   = .RIGHT
     MOUSE_TABLE["MIDDLE"]  = .MIDDLE
     MOUSE_TABLE["SIDE"]    = .SIDE     // button 4
     MOUSE_TABLE["EXTRA"]   = .EXTRA    // button 5
-    MOUSE_TABLE["FORWARD"] = .FORWARD  // raylib extra mapping
+    MOUSE_TABLE["FORWARD"] = .FORWARD
     MOUSE_TABLE["BACK"]    = .BACK
 
-    // Common aliases we ACCEPT when parsing (but won't write)
+    // common aliases we ACCEPT
     MOUSE_TABLE["BUTTON1"] = .LEFT
     MOUSE_TABLE["BUTTON2"] = .RIGHT
     MOUSE_TABLE["BUTTON3"] = .MIDDLE
@@ -570,7 +590,7 @@ ensure_key_table :: proc() {
     KEY_TABLE["8"]             = .EIGHT
     KEY_TABLE["9"]             = .NINE
 
-    // Keypad (if you use them)
+    // Keypad
     KEY_TABLE["KP_0"]          = .KP_0
     KEY_TABLE["KP_1"]          = .KP_1
     KEY_TABLE["KP_2"]          = .KP_2
@@ -593,7 +613,9 @@ ensure_key_table :: proc() {
     }
 }
 
-// [a-z0-9_]
+// ---------- misc helpers ----------
+
+// sanitize action names to [a-z0-9_]
 app_action_sanitize :: proc(t: string) -> string {
     s := strings.to_lower(t)
     b := strings.builder_make()
@@ -609,6 +631,7 @@ app_action_sanitize :: proc(t: string) -> string {
     return strings.to_string(b)
 }
 
+// insert or update a key binding by action id
 upsert_key_binding :: proc(binds: ^[dynamic]Key_Bind, action: string, key: rl.KeyboardKey) {
     for i in 0..<len(binds^) {
         if strings.equal_fold(binds^[i].action, action) {
@@ -619,6 +642,7 @@ upsert_key_binding :: proc(binds: ^[dynamic]Key_Bind, action: string, key: rl.Ke
     append(binds, Key_Bind{ key = key, action = action })
 }
 
+// insert or update a mouse binding by action id
 upsert_mouse_binding :: proc(binds: ^[dynamic]Mouse_Bind, action: string, button: rl.MouseButton) {
     for i in 0..<len(binds^) {
         if strings.equal_fold(binds^[i].action, action) {
@@ -629,6 +653,7 @@ upsert_mouse_binding :: proc(binds: ^[dynamic]Mouse_Bind, action: string, button
     append(binds, Mouse_Bind{ button = button, action = action })
 }
 
+// get file name without directories and without extension
 file_stem_from_path :: proc(path: string) -> string {
     sep1 := strings.last_index(path, "/")
     sep2 := strings.last_index(path, "\\")
