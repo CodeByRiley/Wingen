@@ -4,6 +4,7 @@ import "core:os"
 import "core:fmt"
 import "shared:nfd"
 import "core:strings"
+import ui        "ui"
 import world   "world"
 import wingen "wingen"
 import math "core:math"
@@ -11,7 +12,6 @@ import helpers "helpers"
 import rl "vendor:raylib"
 import rand "core:math/rand"
 import rlgl "vendor:raylib/rlgl"
-
 UNITS_TO_METER    : f32 = 100 // 100 UNITS TO 1 METER
 CAMERA_MOVE_SPEED : f32 = 50
 MAX_ENTITIES      : int = 16
@@ -22,26 +22,6 @@ last_path        : string
 
 app := helpers.App{}
 cam_control_active : bool
-
-SimPanel :: struct {
-    altitude_m: f32,
-    dT_K:       f32,
-    airspeed:   f32,
-    char_len_m: f32,
-    // Polar inputs
-    S_ref: f32,
-    Cd0:   f32,
-    AR:    f32,
-    e:     f32,
-    Cl_alpha: f32,
-    Cm_alpha: f32,
-    stall_deg: f32,
-    // Pose
-    pitch_deg: f32,
-    yaw_deg:   f32,
-    roll_deg:  f32,
-    aoa_deg:   f32,
-}
 
 Camera :: struct {
     // state
@@ -109,26 +89,8 @@ camera_make :: proc(pivot: rl.Vector3) -> Camera {
 
 sim_world : world.World
 
-sim_panel := SimPanel{
-    altitude_m = 0.0,
-    dT_K       = 0.0,
-    airspeed   = 650.0,
-    char_len_m = 1.0,
+sim_panel := ui.SimPanel {
 
-    // Polar defaults
-    S_ref      = 1.0,
-    Cd0        = 0.02,
-    AR         = 7.0,
-    e          = 0.8,
-    Cl_alpha   = 6.28318,  // ≈ 2π per rad
-    Cm_alpha   = -0.5,
-    stall_deg  = 15.0,
-
-    // Pose / AoA
-    pitch_deg  = 0.0,
-    yaw_deg    = 0.0,
-    roll_deg   = 0.0,
-    aoa_deg    = 5.0,
 }
 
 shadow_shader      : rl.Shader
@@ -157,7 +119,7 @@ sun_dir_from_angles :: proc(azimuth_deg, elevation_deg: f32) -> rl.Vector3 {
 }
 
 render_wireframe: bool
-
+render_normals: bool
 random_f32 :: proc(min, max: f32) -> f32 {
     // Simplified range random number generation
     return min + (max - min) * rand.float32();
@@ -185,12 +147,7 @@ main :: proc() {
     rl.GuiLoadStyle("assets/style/cherry.style")
     sim_world = world.make_world()
     defer world.clear_world(&sim_world)
-    // id := world.add_parts_from_file(&sim_world, "assets/models/cow.glb", "Suzanne")
-    // if id >= 0 {
-    //     bmin, bmax, ok := world.get_entity_bounds(&sim_world.entities[id])
-    //     if ok do cam_focus_aabb(&camera, bmin, bmax, 1.2)
-    // }
-
+    ui.reset_sim_defaults()
     rlgl.SetClipPlanes(0.05, 50000.0)
 
     camera = camera_make(helpers.v3(0,0,0))
@@ -208,19 +165,31 @@ main :: proc() {
                     // shadow first so the model sits on top
                     draw_planar_shadow(&e.owner, sun_dir, 0.73)
                     //draw_planar_shadow_entity(&e, sun_dir, 0.73)
-                    draw_aero_for_entity(&e, &sim_panel)
+                    //draw_aero_for_entity(&e, &sim_panel)
+                    if (render_wireframe) {
+                        rlgl.EnableWireMode()
+                        if(render_normals) {
+                            world.draw_entity_parts(&e, true, false)
+                        } else {
+                            world.draw_entity_parts(&e, true, true)
+                        }
+
+                        rlgl.DisableWireMode()
+                    } else {
+                        if(render_normals) {
+                            world.draw_entity_parts(&e, true, false)
+                        } else {
+                            world.draw_entity_parts(&e, true, true)
+                        }
+                    }
+                    calc_simpanel_aero(&sim_panel)
                 }
-                if (render_wireframe) {
-                    rlgl.EnableWireMode()
-                    world.draw(&sim_world)
-                    rlgl.DisableWireMode()
-                } else {
-                    world.draw(&sim_world)
-                }
+
             }
         rl.EndMode3D()
 
         draw_ui()
+        ui.draw_sim_panel()
         rl.EndDrawing()
     }
 
@@ -231,12 +200,14 @@ main :: proc() {
     }
 }
 
+
+
 draw_planar_shadow_entity :: proc(e: ^world.EntityParts, light_dir_ws: rl.Vector3, alpha: f32) {
     if !e^.has_model do return
     if math.abs(light_dir_ws.y) < 0.05 do return // avoid crazy stretch
 
     rl.BeginBlendMode(rl.BlendMode.ALPHA)
-    rlgl.DisableDepthMask() // don’t write depth; still test against it
+    rlgl.DisableDepthMask() // don’t write depth
 
     // Set shader + uniforms
     for i in 0..<int(e^.owner.materialCount) {
@@ -258,16 +229,14 @@ draw_planar_shadow_entity :: proc(e: ^world.EntityParts, light_dir_ws: rl.Vector
     // Draw with the SAME rlgl transform you use for the entity
     rlgl.PushMatrix()
     rlgl.Translatef(e^.offset.x, e^.offset.y, e^.offset.z)
-    rlgl.Rotatef(e^.yaw_deg, 0, 1, 0)
+
+    //rlgl.Rotatef(e^.yaw_deg, 0, 1, 0)
     rlgl.Scalef(e^.scale, e^.scale, e^.scale)
 
     // render the whole model using shadow shader
     rl.DrawModel(e^.owner, rl.Vector3{0,0,0}, 1.0, rl.BLACK)
 
     rlgl.PopMatrix()
-
-    // Restore materials to their original shaders if you cached them,
-    // or just leave them—your normal draw sets its own shaders anyway.
 
     rlgl.EnableDepthMask()
     rl.EndBlendMode()
@@ -308,76 +277,32 @@ draw_planar_shadow :: proc(model: ^rl.Model, light_dir_ws: rl.Vector3, alpha: f3
     rl.EndBlendMode()
 }
 
-draw_aero_for_entity :: proc(e: ^world.EntityParts, panel: ^SimPanel) {
-    // 0) Units
-    U2M        := 1.0/UNITS_TO_METER
-    scale_draw := rl.Vector3{ e^.scale, e^.scale, e^.scale }     // world units
-    scale_m    := rl.Vector3{ e^.scale*U2M, e^.scale*U2M, e^.scale*U2M } // meters
+draw_aero_for_entity :: proc(e: ^world.EntityParts, sp: ^ui.SimPanel) {
 
-    // 1) Entity pose -> row-major TRS
-    R_ent  := rl.QuaternionFromAxisAngle(rl.Vector3{0,1,0}, math.to_radians_f32(e^.yaw_deg))
-    M_draw := wingen.make_trs_rm(e^.offset, R_ent, scale_draw)   // world-space TRS for CP/axes
-
-    // Body axes from entity
-    x_axis, y_axis, z_axis := wingen.axes_from_row_major(M_draw) // x=fwd, y=right, z=up
-
-    // 2) Flow (AoA about body +Y). Air comes FROM this dir.
-    aoa      := math.to_radians_f32(panel^.aoa_deg)
-    q_aoa    := rl.QuaternionFromAxisAngle(y_axis, aoa)
-    flow_dir := -(rl.Vector3RotateByQuaternion(x_axis, q_aoa))
-    alpha, beta, flow_hat, drag_dir, lift_dir, _,_,_,_ :=
-        wingen.angles_and_dirs(flow_dir, x_axis, y_axis, z_axis)
-
-    mesh := &e^.owner.meshes[0]
-
-    // Areas/volume in meters; CP in world units
-    A_surf_m2 := wingen.surface_area(mesh, R_ent, scale_m)
-    V_m3      := wingen.approx_mesh_vol(mesh, R_ent, scale_m)
-
-    // Planform area (two-sided) for wings (project onto XY: ±Z)
-    A_up_u, _ := wingen.projected_area_and_pressure_center_world(mesh, M_draw,  z_axis)
-    A_dn_u, _ := wingen.projected_area_and_pressure_center_world(mesh, M_draw, -z_axis)
-    S_wing_m2 := (A_up_u + A_dn_u) * (U2M * U2M)
-
-    // Frontal area for bluff body (project along flow)
-    A_front_u, cp_world := wingen.projected_area_and_pressure_center_world(mesh, M_draw, flow_hat)
-    S_front_m2          := A_front_u * (U2M * U2M)
-
-    // 4) Atmosphere / inputs
-    props := wingen.flow_props(panel^.altitude_m, panel^.airspeed, panel^.dT_K, math.max(panel^.char_len_m, 1e-3))
-    inp := wingen.AeroInputs{}
-    if panel^.S_ref > 0 {
-        inp = wingen.AeroInputs{
-            S_ref     = panel^.S_ref,
-            L_ref     = panel^.char_len_m,
-            Cd0       = panel^.Cd0, AR = panel^.AR, e = panel^.e,
-            Cl_alpha  = panel^.Cl_alpha, Cm_alpha = panel^.Cm_alpha,
-            stall_deg = panel^.stall_deg,
-        }
-    } else {
-        inp = wingen.AeroInputs{
-            S_ref     = S_wing_m2,
-            L_ref     = panel^.char_len_m,
-            Cd0       = panel^.Cd0, AR = panel^.AR, e = panel^.e,
-            Cl_alpha  = panel^.Cl_alpha, Cm_alpha = panel^.Cm_alpha,
-            stall_deg = panel^.stall_deg,
-        }
-    }
-
-
-    out := wingen.compute_aero_from_inputs(props, alpha, beta, inp.S_ref, &inp, cp_world, lift_dir, drag_dir)
-
-    // 5) HUD + gizmos
-    rl.DrawText(fmt.ctprintf("rho=%.3f q=%.0f M=%.2f Re=%.2e", out.props.rho, out.props.q, out.props.M, out.props.Re), 10, 10, 18, rl.WHITE)
-    rl.DrawText(fmt.ctprintf("A_surf=%.3f  S_plan=%.3f  S_front=%.3f  Vol≈%.3f", A_surf_m2, S_wing_m2, S_front_m2, V_m3), 10, 30, 18, rl.WHITE)
-    rl.DrawText(fmt.ctprintf("AoA=%.1f°  Beta=%.1f°  Cl=%.3f  Cd=%.3f  L=%.1fN  D=%.1fN",
-        math.to_degrees_f32(alpha), math.to_degrees_f32(beta), out.Cl, out.Cd, out.Lift, out.Drag), 10, 50, 18, rl.WHITE)
-
-    gain : f32 = 0.02
-    rl.DrawLine3D(cp_world, cp_world + flow_hat * (0.5*panel^.airspeed), rl.RED)
-    rl.DrawLine3D(cp_world, cp_world + lift_dir * (out.Lift * gain),     rl.GREEN)
-    rl.DrawLine3D(cp_world, cp_world + drag_dir * (out.Drag * gain),     rl.BLUE)
 }
+
+calc_simpanel_aero :: proc(sim: ^ui.SimPanel) -> wingen.SimState {
+    inputs: wingen.SimInputs
+    inputs.altitude_m       = sim.altitude_m
+    inputs.delta_t_k        = sim.dT_K
+    inputs.velocity_ms      = sim.airspeed_m
+    inputs.char_len_m       = sim.char_len_m
+    inputs.S_ref_m2         = sim.S_ref_m2
+    inputs.cd0              = sim.Cd0
+    inputs.S_wet_over_Sref  = 2.0
+    inputs.ar               = sim.AR
+    inputs.e_oswald         = sim.e
+    inputs.Cl_alpha_per_rad = sim.Cl_alpha
+    inputs.Cm_alpha_per_rad = sim.Cm_alpha
+    inputs.stall_deg        = sim.stall_deg
+    inputs.alpha_deg        = sim.alpha_deg
+    inputs.alpha0_deg       = 0.0
+    inputs.Mcrit            = 0.80
+    inputs.wave_drag_k      = 0.0
+
+    return wingen.solve_aero(inputs)
+}
+
 
 to_remove := -1
 draw_ui :: proc() {
@@ -434,7 +359,6 @@ draw_ui :: proc() {
 update :: proc() {
     update_cam_control_state()
     cam_update(&camera, rl.GetFrameTime())
-    move_speed := CAMERA_MOVE_SPEED * rl.GetFrameTime()
     pos, fwd, right, up := cam_basis(&camera)
     _ = pos; _ = up
 
@@ -453,6 +377,9 @@ update :: proc() {
 
     if(helpers.key_action_pressed(app.keybinds, "render_wireframe")) {
         render_wireframe = !render_wireframe
+    }
+    if(helpers.key_action_pressed(app.keybinds, "render_normals")) {
+        render_normals = !render_normals
     }
 }
 
@@ -502,17 +429,16 @@ cam_focus_aabb :: proc(c: ^Camera, bmin, bmax: rl.Vector3, margin :f32= 1.2) {
 }
 
 cam_update :: proc(c: ^Camera, dt: f32) {
-    mmb   := helpers.mouse_action_down(app.mousebinds, "cam_look")
+    rclick   := helpers.mouse_action_down(app.mousebinds, "cam_look")
     shift := rl.IsKeyDown(rl.KeyboardKey.LEFT_SHIFT)   || rl.IsKeyDown(rl.KeyboardKey.RIGHT_SHIFT)
     ctrl  := rl.IsKeyDown(rl.KeyboardKey.LEFT_CONTROL) || rl.IsKeyDown(rl.KeyboardKey.RIGHT_CONTROL)
     moving := helpers.key_action_down(app.keybinds, "cam_move_enable")
 
-    // (Optional) focus key — make sure the name matches your INI ("cam_focus")
     if helpers.key_action_pressed(app.keybinds, "cam_focus") {
         cam_focus_aabb(c, helpers.v3(-1,-1,-1), helpers.v3(1,1,1))
     }
 
-    // Wheel zoom – always allowed (or gate on cam_control_active if you prefer)
+    // Wheel zoom – always allowed
     wheel := rl.GetMouseWheelMove()
     if wheel != 0 {
         factor := math.pow(1.0 - c^.zoom_speed, wheel)
@@ -524,8 +450,8 @@ cam_update :: proc(c: ^Camera, dt: f32) {
         dx := md.x
         dy := md.y
 
-        // Only PAN/DOLLY when MMB is down (Blender-like)
-        if mmb && shift {
+        // Only PAN/DOLLY when MMB is down
+        if rclick && shift {
             // PAN
             _, _, right, up := cam_basis(c)
             px_to_world := (2.0 * c^.distance * math.tan(math.to_radians(c^.fov_y_deg)*0.5)) / f32(rl.GetScreenHeight())
@@ -533,13 +459,13 @@ cam_update :: proc(c: ^Camera, dt: f32) {
             c^.pivot = helpers.v3_add(c^.pivot,
                 helpers.v3_add(helpers.v3_scale(right, -dx*scale),
                                helpers.v3_scale(up,     dy*scale)))
-        } else if mmb && ctrl {
+        } else if rclick && ctrl {
             // DOLLY
             sign : f32 = -1.0
             c^.distance = c^.distance * (1.0 + sign * dy * c^.zoom_speed * 0.01)
             c^.distance = math.clamp(c^.distance, c^.min_distance, c^.max_distance)
-        } else if mmb || moving {
-            // ORBIT when either MMB is held OR cam_move_enable is held
+        } else if rclick || moving {
+            // ORBIT when either RIGHTMOUSE is held OR cam_move_enable is held
             sy : f32 = 1.0; if c^.invert_y do sy = -1.0
             c^.yaw   += dx * c^.orbit_speed
             c^.pitch -= dy * c^.orbit_speed * sy
@@ -596,8 +522,8 @@ open_model_dialog :: proc() -> (ok: bool, path: string) {
     args := nfd.Open_Dialog_Args{
         filter_list  = raw_data(filters[:]),
         filter_count = len(filters),
-        default_path = strings.clone_to_cstring(def)
-        // parentWindow can be set if the binding exposes it; see NFDe docs.
+        default_path = strings.clone_to_cstring(def),
+        parent_window = nfd.Window_Handle{.Windows, rl.GetWindowHandle()}
     }
 
     helpers.Log(def)

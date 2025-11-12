@@ -66,8 +66,8 @@ default_app :: proc() -> App {
     append(&kb, Key_Bind{.LEFT_SHIFT,   "cam_speed"})
     append(&kb, Key_Bind{.LEFT_CONTROL, "cam_move_enable"})
     append(&kb, Key_Bind{.G, "render_wireframe"})
+    append(&kb, Key_Bind{.N, "render_normals"})
     append(&kb, Key_Bind{.F, "cam_focus"})
-
     append(&mb, Mouse_Bind{.RIGHT, "cam_look"}) // orbit/pan/dolly
 
     return App{
@@ -100,7 +100,7 @@ Log :: proc(message: string, level: LogLevel = .INFO){
 // ---------- config file paths ----------
 
 config_paths :: proc() -> (dir: string, file: string) {
-    // compute "%LOCALAPPDATA%/Wingen/settings.ini" (or ./Wingen/settings.ini)
+    // "%LOCALAPPDATA%/Wingen/settings.ini" (or ./Wingen/settings.ini)
     lad := os.get_env("LOCALAPPDATA")
     if lad != "" {
         dir = filepath.join({lad, "Wingen"}, context.allocator)

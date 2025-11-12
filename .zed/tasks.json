@@ -16,7 +16,7 @@
   {
     "label": "Build (Odin)",
     "cwd": "F:\\develop\\Odin\\Wingen\\build",
-    "command": "odin build \"..\\src\" -build-mode:exe -subsystem:windows -target-features:\"sse2\" -target:windows_amd64 -thread-count:12 -o:speed -out:\"wingen.exe\"",
+    "command": "odin build \"..\\src\" -build-mode:exe -show-timings -subsystem:console -target-features:\"sse2\" -target:windows_amd64 -thread-count:12 -o:speed -out:\"wingen.exe\"",
     "shell": "system",
 
     // Display options

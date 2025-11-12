@@ -1,7 +1,7 @@
 @echo off
 
 :: 1. Define the build command and output file path
-set ODIN_BUILD_CMD=odin build "..\\src" -build-mode:exe -subsystem:console -target-features:"sse2" -target:windows_amd64 -thread-count:12 -o:speed -out:"wingen.exe"
+set ODIN_BUILD_CMD=odin build "..\\src" -build-mode:exe -show-timings -debug -subsystem:console -target-features:"sse2" -target:windows_amd64 -thread-count:12 -o:speed -out:"wingen.exe"
 set EXE_PATH=.\wingen.exe
 
 :: 2. Execute the build command

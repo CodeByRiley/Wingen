@@ -17,6 +17,14 @@ v3_norm   :: proc(a: rl.Vector3) -> rl.Vector3 {
     return v3_scale(a, 1.0/l)
 }
 
+get_vertices_v3 :: proc(mesh: ^rl.Mesh, i: int) -> rl.Vector3 {
+    return rl.Vector3{
+        mesh.vertices[i*3+0],
+        mesh.vertices[i*3+1],
+        mesh.vertices[i*3+2],
+    };
+}
+
 f2u8_unorm :: proc(v: f32) -> u8 {
     vv := math.clamp(v, 0.0, 1.0)
     return cast(u8)(vv*255.0 + 0.5) // round-to-nearest
